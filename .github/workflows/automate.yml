@@ -1,0 +1,80 @@
+name: Azure Application Gateway Workflow
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Azure CLI
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Read values from template
+        id: read-values
+        uses: jacobtomlinson/read-yaml-action@v1
+        with:
+          path: './template.yml'
+
+      - name: Create backend pool
+        run: |
+          az network application-gateway address-pool create \
+          --name ${{ steps.read-values.outputs.backend_pool_name }} \
+          --gateway-name ${{ steps.read-values.outputs.app_gateway_name }} \
+          --resource-group ${{ steps.read-values.outputs.resource_group_name }}
+
+      - name: Create backend setting
+        run: |
+          az network application-gateway backend-http-settings create \
+          --name ${{ steps.read-values.outputs.backend_setting_name }} \
+          --port ${{ steps.read-values.outputs.backend_port }} \
+          --protocol Http \
+          --cookie-based-affinity Disabled \
+          --probe-name ${{ steps.read-values.outputs.health_probe_name }} \
+          --connection-draining-timeout 120 \
+          --host-name-from-backend-pool \
+          --gateway-name ${{ steps.read-values.outputs.app_gateway_name }} \
+          --resource-group ${{ steps.read-values.outputs.resource_group_name }} \
+          --address-pool ${{ steps.read-values.outputs.backend_pool_name }}
+
+      - name: Create health probe
+        run: |
+          az network application-gateway probe create \
+          --name ${{ steps.read-values.outputs.health_probe_name }} \
+          --gateway-name ${{ steps.read-values.outputs.app_gateway_name }} \
+          --resource-group ${{ steps.read-values.outputs.resource_group_name }} \
+          --protocol Http \
+          --host ${{ steps.read-values.outputs.health_probe_host }} \
+          --path ${{ steps.read-values.outputs.health_probe_path }} \
+          --interval ${{ steps.read-values.outputs.health_probe_interval }} \
+          --timeout ${{ steps.read-values.outputs.health_probe_timeout }} \
+          --threshold ${{ steps.read-values.outputs.health_probe_threshold }}
+
+      - name: Upload certificate to Key Vault
+        run: |
+          az keyvault certificate import \
+          --vault-name ${{ steps.read-values.outputs.key_vault_name }} \
+          --name ${{ steps.read-values.outputs.certificate_name }} \
+          --file ${{ steps.read-values.outputs.certificate_file }} \
+          --password ${{ steps.read-values.outputs.certificate_password }}
+
+      - name: Create listener with certificate
+        run: |
+          az network application-gateway http-listener create \
+          --name ${{ steps.read-values.outputs.listener_name }} \
+          --frontend-port ${{ steps.read-values.outputs.frontend_port_name }} \
+          --frontend-ip-name ${{ steps.read-values.outputs.frontend_ip_name }} \
+          --ssl-certificate ${{ steps.read-values.outputs.certificate_name }} \
+          --gateway-name ${{ steps.read-values.outputs.app_gateway_name }} \
+          --resource-group ${{ steps.read-values.outputs.resource_group_name }}
+
+      - name: Create rule
+        run: |
+          az network application-gateway rule create \
+          --name ${{ steps.read-values.outputs.rule_name }} \
+          --http-listener ${{ steps.read
